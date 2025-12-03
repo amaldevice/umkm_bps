@@ -30,29 +30,39 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
 @st.cache_data
-def load_data(uploaded_file):
-    """Load data dari uploaded file (CSV atau Excel)."""
+def load_data(uploaded_file, skiprows=0):
+    """Load data dari uploaded file (CSV atau Excel).
+    
+    Args:
+        uploaded_file: File yang diupload
+        skiprows: Jumlah baris yang akan dilewati dari atas (default: 0)
+    
+    Returns:
+        DataFrame yang sudah diload
+    """
     file_name = uploaded_file.name.lower()
     
+    # Pastikan skiprows >= 0
+    skiprows = max(0, int(skiprows)) if skiprows else 0
+    
     if file_name.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(uploaded_file)
+        df = pd.read_excel(uploaded_file, skiprows=skiprows)
     else:
         # Coba berbagai encoding untuk CSV
         try:
-            df = pd.read_csv(uploaded_file, encoding='utf-8')
+            df = pd.read_csv(uploaded_file, encoding='utf-8', skiprows=skiprows)
         except UnicodeDecodeError:
             try:
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding='latin-1')
+                df = pd.read_csv(uploaded_file, encoding='latin-1', skiprows=skiprows)
             except UnicodeDecodeError:
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding='cp1252')
+                df = pd.read_csv(uploaded_file, encoding='cp1252', skiprows=skiprows)
     
     return df
 
@@ -311,6 +321,285 @@ def get_kode_names() -> dict:
     }
 
 
+def detect_and_fill_jaringan_usaha(df: pd.DataFrame, nama_col: str = 'nama_usaha') -> pd.DataFrame:
+    """Deteksi format <XXXX> dalam nama usaha dan isi bentuk_badan_hukum_usaha=12 dan jaringan_usaha=1.
+    
+    Jika di nama usaha terdapat format <XXXX> (contoh: PANGKAS RAMBUT MDC < APDIANTO RIO TUBUAN >),
+    maka:
+    - bentuk_badan_hukum_usaha diisi dengan 12 (Usaha Perseorangan)
+    - jaringan_usaha diisi dengan 1
+    
+    Args:
+        df: DataFrame yang akan diproses
+        nama_col: Nama kolom yang berisi nama usaha (default: 'nama_usaha')
+    
+    Returns:
+        DataFrame dengan kolom bentuk_badan_hukum_usaha dan jaringan_usaha yang sudah diisi
+    """
+    df = df.copy()
+    
+    # Pastikan kolom ada
+    if 'bentuk_badan_hukum_usaha' not in df.columns:
+        df['bentuk_badan_hukum_usaha'] = None
+    
+    if 'jaringan_usaha' not in df.columns:
+        df['jaringan_usaha'] = None
+    
+    # Pastikan kolom nama_usaha ada
+    if nama_col not in df.columns:
+        return df
+    
+    # Pattern untuk mendeteksi format <XXXX> (bisa dengan spasi di dalam kurung)
+    # Pattern: <...> atau < ... > atau <...>
+    pattern = r'<[^>]+>'
+    
+    # Deteksi format <XXXX> pada semua nama usaha
+    def has_jaringan_format(nama):
+        if pd.isna(nama):
+            return False
+        
+        nama_str = str(nama).strip()
+        
+        # Skip jika kosong atau invalid
+        if nama_str in ['', 'nan', 'None', '<NA>']:
+            return False
+        
+        # Deteksi format <XXXX>
+        return bool(re.search(pattern, nama_str))
+    
+    # Buat mask untuk rows yang memiliki format <XXXX>
+    mask_jaringan = df[nama_col].apply(has_jaringan_format)
+    
+    # Set bentuk_badan_hukum_usaha = 12 untuk rows yang terdeteksi
+    df.loc[mask_jaringan, 'bentuk_badan_hukum_usaha'] = 12
+    
+    # Set jaringan_usaha = 1 untuk rows yang terdeteksi
+    df.loc[mask_jaringan, 'jaringan_usaha'] = 1
+    
+    return df
+
+
+def fill_nomor_whatsapp(df: pd.DataFrame, nomor_telepon_col: str = 'nomor_telepon', nomor_whatsapp_col: str = 'nomor_whatsapp') -> pd.DataFrame:
+    """Isi kolom nomor_whatsapp jika kosong dari nomor_telepon dengan format 08... diubah menjadi +628...
+    
+    Args:
+        df: DataFrame yang akan diproses
+        nomor_telepon_col: Nama kolom nomor telepon (default: 'nomor_telepon')
+        nomor_whatsapp_col: Nama kolom nomor whatsapp (default: 'nomor_whatsapp')
+    
+    Returns:
+        DataFrame dengan kolom nomor_whatsapp yang sudah diisi
+    """
+    df = df.copy()
+    
+    # Pastikan kolom nomor_whatsapp ada
+    if nomor_whatsapp_col not in df.columns:
+        df[nomor_whatsapp_col] = None
+    
+    # Pastikan kolom nomor_telepon ada
+    if nomor_telepon_col not in df.columns:
+        return df
+    
+    # Fungsi untuk convert nomor telepon ke format whatsapp
+    def convert_to_whatsapp(nomor_telepon):
+        if pd.isna(nomor_telepon):
+            return None
+        
+        # Convert ke string dan strip whitespace
+        nomor_str = str(nomor_telepon).strip()
+        
+        # Cek jika kosong atau invalid
+        if nomor_str in ['', 'nan', 'None', '<NA>']:
+            return None
+        
+        # Cek jika format dimulai dengan 08
+        if nomor_str.startswith('08'):
+            # Ubah format dari 08... menjadi +628...
+            # Hapus karakter non-digit terlebih dahulu untuk memastikan hanya angka
+            nomor_clean = re.sub(r'\D', '', nomor_str)
+            if nomor_clean.startswith('08'):
+                return '+62' + nomor_clean[1:]  # Ganti 0 dengan +62
+        
+        return None
+    
+    # Cari rows yang nomor_whatsapp kosong
+    mask_empty_whatsapp = df[nomor_whatsapp_col].isna()
+    if mask_empty_whatsapp.any():
+        # Cek juga yang string kosong atau 'nan'
+        mask_str_empty = ~df[nomor_whatsapp_col].isna() & (
+            df[nomor_whatsapp_col].astype(str).str.strip().isin(['', 'nan', 'None', '<NA>'])
+        )
+        mask_empty_whatsapp = mask_empty_whatsapp | mask_str_empty
+    
+    if not mask_empty_whatsapp.any():
+        return df
+    
+    # Apply conversion untuk rows yang nomor_whatsapp kosong dan nomor_telepon ada
+    mask_has_telepon = df[nomor_telepon_col].notna()
+    mask_to_fill = mask_empty_whatsapp & mask_has_telepon
+    
+    if mask_to_fill.any():
+        # Convert nomor_telepon ke format whatsapp
+        converted = df.loc[mask_to_fill, nomor_telepon_col].apply(convert_to_whatsapp)
+        
+        # Hanya isi yang berhasil dikonversi (tidak None)
+        mask_valid = converted.notna()
+        if mask_valid.any():
+            df.loc[mask_to_fill & mask_valid, nomor_whatsapp_col] = converted[mask_valid]
+    
+    return df
+
+
+def clean_nama_usaha(df: pd.DataFrame, nama_col: str = 'nama_usaha') -> pd.DataFrame:
+    """Clean penamaan usaha di kolom nama_usaha dengan regex.
+    
+    Ketentuan:
+    - PT. ANJUNG MAKMUR -> ANJUNG MAKMUR, PT
+    - CV. KARTIKA PUTRI -> KARTIKA PUTRI, CV
+    - MAKALE TORAJA MINING. PT -> MAKALE TORAJA MINING, PT
+    - JUAL BELI ROTAN (ARDIN) -> JUAL BELI ROTAN <ARDIN>
+    - Semua kurung (biasa, siku, kurawal, tanda kutip) diubah menjadi <>
+    
+    Args:
+        df: DataFrame yang akan diproses
+        nama_col: Nama kolom yang berisi nama usaha (default: 'nama_usaha')
+    
+    Returns:
+        DataFrame dengan kolom nama_usaha yang sudah dibersihkan
+    """
+    df = df.copy()
+    
+    # Pastikan kolom nama_usaha ada
+    if nama_col not in df.columns:
+        return df
+    
+    def clean_single_nama(nama):
+        if pd.isna(nama):
+            return None
+        
+        nama_str = str(nama).strip()
+        
+        # Skip jika kosong atau invalid
+        if nama_str in ['', 'nan', 'None', '<NA>']:
+            return nama_str
+        
+        # Cek apakah sudah dalam format yang benar (sudah ada ", PT", ", CV", dll di belakang)
+        # Jika sudah benar, hanya lakukan cleaning kurung saja, skip processing bentuk badan hukum
+        sudah_benar = re.search(r',\s*(PT|CV|UD|PD|FA|P\.T\.?|C\.V\.?|U\.D\.?|P\.D\.?|F\.A\.?)\s*$', nama_str, re.IGNORECASE)
+        skip_badan_hukum = sudah_benar is not None
+        
+        # Step 1: Ubah semua jenis kurung menjadi <>
+        # Pattern untuk kurung biasa: (content)
+        nama_str = re.sub(r'\(([^)]*)\)', r'<\1>', nama_str)
+        # Pattern untuk kurung siku: [content]
+        nama_str = re.sub(r'\[([^\]]*)\]', r'<\1>', nama_str)
+        # Pattern untuk kurung kurawal: {content}
+        nama_str = re.sub(r'\{([^}]*)\}', r'<\1>', nama_str)
+        # Pattern untuk tanda kutip ganda: "content" atau "content"
+        nama_str = re.sub(r'["""]([^"""]*)["""]', r'<\1>', nama_str)
+        # Pattern untuk tanda kutip tunggal: 'content' atau 'content'
+        nama_str = re.sub(r"['']([^'']*)['']", r'<\1>', nama_str)
+        # Pattern untuk backtick: `content`
+        nama_str = re.sub(r'`([^`]*)`', r'<\1>', nama_str)
+        
+        # Jika sudah dalam format yang benar, skip processing bentuk badan hukum
+        if skip_badan_hukum:
+            # Bersihkan spasi ganda
+            nama_str = re.sub(r'\s+', ' ', nama_str).strip()
+            # Bersihkan double koma di akhir (bisa terjadi jika ada koma sebelum bentuk badan hukum)
+            nama_str = re.sub(r',\s*,\s*(PT|CV|UD|PD|FA|P\.T\.?|C\.V\.?|U\.D\.?|P\.D\.?|F\.A\.?)\s*$', r', \1', nama_str, flags=re.IGNORECASE)
+            # Bersihkan multiple koma berturut-turut (lebih dari 2 koma)
+            nama_str = re.sub(r',{2,}', ',', nama_str)
+            # Pastikan format akhir benar: ... , PT (bukan ... ,, PT)
+            nama_str = re.sub(r',\s*,', ', ', nama_str)  # Bersihkan koma dengan spasi ganda di tengah
+            return nama_str
+        
+        # Step 2: Memindahkan bentuk badan hukum dari depan ke belakang
+        # Pattern untuk bentuk badan hukum di depan: PT., CV., P.T., C.V., dll
+        # Juga menangani variasi dengan titik atau tanpa titik, dengan spasi atau tanpa spasi
+        
+        # List pattern bentuk badan hukum yang perlu dipindahkan
+        badan_hukum_patterns = [
+            (r'^PT\.?\s+', 'PT'),           # PT. atau PT
+            (r'^P\.T\.?\s+', 'PT'),         # P.T. atau P.T
+            (r'^CV\.?\s+', 'CV'),           # CV. atau CV
+            (r'^C\.V\.?\s+', 'CV'),         # C.V. atau C.V
+            (r'^UD\.?\s+', 'UD'),           # UD. atau UD
+            (r'^U\.D\.?\s+', 'UD'),         # U.D. atau U.D
+            (r'(?<!S\.)\bPD\.?\s+', 'PD'),         # PD. atau PD
+            (r'(?<!S\.)\bP\.D\.?\s+', 'PD'),         # P.D. atau P.D
+            (r'^FA\.?\s+', 'FA'),           # FA. atau FA
+            (r'^F\.A\.?\s+', 'FA'),         # F.A. atau F.A
+        ]
+        
+        moved_from_front = False
+        # Cek dan pindahkan bentuk badan hukum dari depan
+        for pattern, suffix in badan_hukum_patterns:
+            match = re.match(pattern, nama_str, re.IGNORECASE)
+            if match:
+                # Hapus bentuk badan hukum dari depan
+                nama_str = re.sub(pattern, '', nama_str, flags=re.IGNORECASE).strip()
+                # Cek apakah sudah ada bentuk badan hukum di belakang
+                if not re.search(r',\s*(PT|CV|UD|PD|FA|P\.T\.?|C\.V\.?|U\.D\.?|P\.D\.?|F\.A\.?)\s*$', nama_str, re.IGNORECASE):
+                    # Tambahkan di belakang dengan koma
+                    nama_str = f"{nama_str}, {suffix}"
+                moved_from_front = True
+                break
+        
+        # Step 3: Menangani bentuk badan hukum di belakang dengan titik
+        # Hanya jika belum dipindahkan dari depan
+        if not moved_from_front:
+            # Pattern: ... PT. atau ... P.T. atau ... . PT -> ... , PT
+            # Pattern: ... CV. atau ... C.V. atau ... . CV -> ... , CV
+            # Menangani kasus seperti "MAKALE TORAJA MINING. PT" (titik langsung diikuti PT)
+            # Cek dulu apakah sudah ada bentuk badan hukum di belakang
+            if not re.search(r',\s*(PT|CV|UD|PD|FA|P\.T\.?|C\.V\.?|U\.D\.?|P\.D\.?|F\.A\.?)\s*$', nama_str, re.IGNORECASE):
+                nama_str = re.sub(r'\.\s*PT\.?\s*$', ', PT', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\.\s*P\.T\.?\s*$', ', PT', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+PT\.?\s*$', ', PT', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+P\.T\.?\s*$', ', PT', nama_str, flags=re.IGNORECASE)
+                
+                nama_str = re.sub(r'\.\s*CV\.?\s*$', ', CV', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\.\s*C\.V\.?\s*$', ', CV', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+CV\.?\s*$', ', CV', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+C\.V\.?\s*$', ', CV', nama_str, flags=re.IGNORECASE)
+                
+                nama_str = re.sub(r'\.\s*UD\.?\s*$', ', UD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\.\s*U\.D\.?\s*$', ', UD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+UD\.?\s*$', ', UD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+U\.D\.?\s*$', ', UD', nama_str, flags=re.IGNORECASE)
+                
+                nama_str = re.sub(r'\.\s*PD\.?\s*$', ', PD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\.\s*P\.D\.?\s*$', ', PD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+PD\.?\s*$', ', PD', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+P\.D\.?\s*$', ', PD', nama_str, flags=re.IGNORECASE)
+                
+                nama_str = re.sub(r'\.\s*FA\.?\s*$', ', FA', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\.\s*F\.A\.?\s*$', ', FA', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+FA\.?\s*$', ', FA', nama_str, flags=re.IGNORECASE)
+                nama_str = re.sub(r'\s+F\.A\.?\s*$', ', FA', nama_str, flags=re.IGNORECASE)
+        
+        # Bersihkan spasi ganda
+        nama_str = re.sub(r'\s+', ' ', nama_str).strip()
+        
+        # Bersihkan double koma di akhir (bisa terjadi jika ada koma sebelum bentuk badan hukum)
+        # Pattern: ... ,, PT -> ... , PT
+        # Pattern: ... ,, CV -> ... , CV
+        # dll untuk semua bentuk badan hukum
+        nama_str = re.sub(r',\s*,\s*(PT|CV|UD|PD|FA|P\.T\.?|C\.V\.?|U\.D\.?|P\.D\.?|F\.A\.?)\s*$', r', \1', nama_str, flags=re.IGNORECASE)
+        # Bersihkan multiple koma berturut-turut (lebih dari 2 koma)
+        nama_str = re.sub(r',{2,}', ',', nama_str)
+        # Pastikan format akhir benar: ... , PT (bukan ... ,, PT)
+        nama_str = re.sub(r',\s*,', ', ', nama_str)  # Bersihkan koma dengan spasi ganda di tengah
+        
+        return nama_str
+    
+    # Apply cleaning ke semua rows
+    df[nama_col] = df[nama_col].apply(clean_single_nama)
+    
+    return df
+
+
 def organize_columns_by_category(df: pd.DataFrame) -> tuple:
     """Organisir kolom berdasarkan kategori yang ditentukan.
     
@@ -566,6 +855,18 @@ def main():
         
         st.divider()
         
+        # Skip rows setting
+        st.subheader("⚡ Pengaturan Load Data")
+        skip_rows = st.number_input(
+            "Skip Rows",
+            min_value=0,
+            value=0,
+            step=1,
+            help="Jumlah baris yang akan dilewati dari atas file saat load data. Contoh: 1 untuk skip header pertama, 5 untuk skip 5 baris pertama."
+        )
+        
+        st.divider()
+        
         # Kota codes
         st.subheader("🏙️ Kode Kota")
         kota_codes_input = st.text_input(
@@ -594,7 +895,7 @@ def main():
     if usaha_file is not None:
         # Load data
         with st.spinner("Loading data usaha..."):
-            df = load_data(usaha_file)
+            df = load_data(usaha_file, skiprows=skip_rows)
             df_original = df.copy()
         
         st.success(f"✅ Data loaded: {df.shape[0]:,} rows × {df.shape[1]} columns")
@@ -631,6 +932,8 @@ def main():
             with col1:
                 do_clean_columns = st.checkbox("Clean column names", value=True)
                 do_format_kode = st.checkbox("Format kode wilayah", value=True)
+                do_clean_nama_usaha = st.checkbox("Clean penamaan usaha", value=True)
+                
             
             with col2:
                 do_merge_wilayah = st.checkbox(
@@ -639,6 +942,8 @@ def main():
                     disabled=wilayah_file is None
                 )
                 do_classify = st.checkbox("Klasifikasi bentuk badan hukum", value=True)
+                do_detect_jaringan = st.checkbox("Deteksi jaringan usaha tunggal/perorangan (format <XXXX>)", value=True)
+                do_fill_whatsapp = st.checkbox("Isi nomor WhatsApp dari nomor telepon", value=True)
             
             if st.button("🚀 Proses Data", type="primary"):
                 progress = st.progress(0)
@@ -656,6 +961,14 @@ def main():
                 if do_format_kode:
                     status.text("Formatting kode wilayah...")
                     df_processed = format_kode_wilayah(df_processed)
+                    progress.progress(30)
+                
+                # Step 2.5: Clean nama usaha
+                if do_clean_nama_usaha:
+                    status.text("Cleaning penamaan usaha...")
+                    nama_col = 'nama_usaha' if 'nama_usaha' in df_processed.columns else None
+                    if nama_col:
+                        df_processed = clean_nama_usaha(df_processed, nama_col)
                     progress.progress(40)
                 
                 # Step 3: Merge dengan wilayah
@@ -666,14 +979,34 @@ def main():
                     alamat_cols = [col for col in df_processed.columns if 'alamat' in col.lower()]
                     alamat_col = alamat_cols[0] if alamat_cols else 'alamat'
                     df_processed = merge_with_wilayah(df_processed, df_wilayah, kota_codes, alamat_col)
-                    progress.progress(60)
+                    progress.progress(55)
                 
                 # Step 4: Klasifikasi
                 if do_classify:
                     status.text("Classifying bentuk badan hukum...")
                     nama_col = 'nama_usaha' if 'nama_usaha' in df_processed.columns else df_processed.columns[1]
                     df_processed = classify_bentuk_badan_hukum(df_processed, nama_col)
-                    progress.progress(80)
+                    progress.progress(70)
+                
+                # Step 4.5: Deteksi jaringan usaha (override klasifikasi jika ada format <XXXX>)
+                if do_detect_jaringan:
+                    status.text("Detecting jaringan usaha from format <XXXX>...")
+                    nama_col = 'nama_usaha' if 'nama_usaha' in df_processed.columns else df_processed.columns[1]
+                    df_processed = detect_and_fill_jaringan_usaha(df_processed, nama_col)
+                    progress.progress(77)
+                
+                # Step 5: Fill nomor WhatsApp
+                if do_fill_whatsapp:
+                    status.text("Filling nomor WhatsApp from nomor telepon...")
+                    # Deteksi kolom nomor_telepon dan nomor_whatsapp (bisa dengan variasi nama)
+                    nomor_telepon_cols = [col for col in df_processed.columns if 'nomor_telepon' in col.lower() or 'telepon' in col.lower()]
+                    nomor_whatsapp_cols = [col for col in df_processed.columns if 'nomor_whatsapp' in col.lower() or 'whatsapp' in col.lower()]
+                    
+                    nomor_telepon_col = nomor_telepon_cols[0] if nomor_telepon_cols else 'nomor_telepon'
+                    nomor_whatsapp_col = nomor_whatsapp_cols[0] if nomor_whatsapp_cols else 'nomor_whatsapp'
+                    
+                    df_processed = fill_nomor_whatsapp(df_processed, nomor_telepon_col, nomor_whatsapp_col)
+                    progress.progress(85)
                 
                 progress.progress(100)
                 status.text("✅ Processing completed!")
@@ -831,6 +1164,14 @@ def main():
                     alamat_col = alamat_cols[0]
                     st.write(f"**{alamat_col}:**")
                     filled = df_show[alamat_col].notna().sum()
+                    st.metric("Filled", f"{filled:,} ({filled/len(df_show)*100:.1f}%)")
+                
+                # Cek kolom nomor WhatsApp
+                nomor_whatsapp_cols = [col for col in df_show.columns if 'nomor_whatsapp' in col.lower() or 'whatsapp' in col.lower()]
+                if nomor_whatsapp_cols:
+                    nomor_whatsapp_col = nomor_whatsapp_cols[0]
+                    st.write(f"**{nomor_whatsapp_col}:**")
+                    filled = df_show[nomor_whatsapp_col].notna().sum()
                     st.metric("Filled", f"{filled:,} ({filled/len(df_show)*100:.1f}%)")
         
         # Tab 5: Download

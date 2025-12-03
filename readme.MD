@@ -17,8 +17,11 @@ Aplikasi ini dibuat untuk memproses dan menganalisis data usaha secara efisien m
 ### 2. **Data Processing**
    - **Clean Column Names**: Menghapus newline characters dari nama kolom
    - **Format Kode Wilayah**: Zero-padding otomatis untuk kode provinsi (2 digit), kabupaten (2 digit), kecamatan (3 digit), dan desa (3 digit)
+   - **Clean Penamaan Usaha**: Standarisasi format nama usaha dengan memindahkan bentuk badan hukum ke belakang dan mengubah semua jenis kurung menjadi format `<>`
    - **Merge dengan Data Wilayah**: Menggabungkan data usaha dengan lookup table wilayah untuk membuat alamat lengkap
    - **Klasifikasi Bentuk Badan Hukum**: Otomatis mengklasifikasikan bentuk badan hukum berdasarkan nama usaha menggunakan pattern matching
+   - **Deteksi Jaringan Usaha**: Mendeteksi format `<XXXX>` dalam nama usaha dan otomatis mengisi `bentuk_badan_hukum_usaha=12` dan `jaringan_usaha=1`
+   - **Isi Nomor WhatsApp**: Mengisi kolom nomor WhatsApp yang kosong dari nomor telepon dengan konversi format `08...` menjadi `+628...`
 
 ### 3. **Klasifikasi Bentuk Badan Hukum**
    - Visualisasi distribusi bentuk badan hukum dengan pie chart
@@ -31,6 +34,7 @@ Aplikasi ini dibuat untuk memproses dan menganalisis data usaha secara efisien m
    - Memory usage dari dataset
    - Data shape (rows × columns)
    - Statistik kolom alamat (jumlah yang terisi)
+   - Statistik kolom nomor WhatsApp (jumlah yang terisi)
 
 ### 5. **Export Data**
    - Download hasil dalam format **Excel (.xlsx)** dengan format terorganisir:
@@ -79,13 +83,19 @@ Aplikasi akan otomatis membuka di browser default pada `http://localhost:8501`
 
 ### Langkah 2: Konfigurasi Pengaturan
 
-1. **Kode Kota**
+1. **Skip Rows**
+   - Jumlah baris yang akan dilewati dari atas file saat load data
+   - Default: `0` (tidak skip baris)
+   - Contoh: `1` untuk skip header pertama, `5` untuk skip 5 baris pertama
+   - Berguna jika file memiliki header atau baris kosong di awal
+
+2. **Kode Kota**
    - Masukkan kode kabupaten yang sebenarnya adalah Kota (bukan Kabupaten)
    - Default: `71` (Kota Gorontalo)
    - Untuk multiple kode, pisahkan dengan koma: `71,72,73`
    - Digunakan untuk menentukan prefix "Kota" vs "Kabupaten" saat membuat alamat
 
-2. **Format Output**
+3. **Format Output**
    - Pilih format output: Excel (.xlsx) atau CSV (.csv)
    - Masukkan nama file output (default: `hasil_eda`)
 
@@ -95,8 +105,11 @@ Aplikasi akan otomatis membuka di browser default pada `http://localhost:8501`
 2. Pilih langkah-langkah processing yang diinginkan:
    - ✅ **Clean column names**: Bersihkan nama kolom dari karakter newline
    - ✅ **Format kode wilayah**: Format kode wilayah dengan zero-padding
+   - ✅ **Clean penamaan usaha**: Standarisasi format nama usaha (memindahkan bentuk badan hukum ke belakang, mengubah kurung menjadi `<>`)
    - ✅ **Merge dengan data wilayah**: Gabungkan dengan data wilayah (hanya aktif jika file wilayah diupload)
    - ✅ **Klasifikasi bentuk badan hukum**: Klasifikasi otomatis berdasarkan nama usaha
+   - ✅ **Deteksi jaringan usaha tunggal/perorangan (format <XXXX>)**: Deteksi format `<XXXX>` dan isi `bentuk_badan_hukum_usaha=12` dan `jaringan_usaha=1`
+   - ✅ **Isi nomor WhatsApp dari nomor telepon**: Konversi nomor telepon format `08...` menjadi nomor WhatsApp format `+628...`
 3. Klik tombol **"🚀 Proses Data"**
 4. Tunggu proses selesai (progress bar akan menampilkan progress)
 5. Data yang sudah diproses akan tersimpan di session state dan dapat dilihat di tab lainnya
@@ -114,7 +127,7 @@ Aplikasi akan otomatis membuka di browser default pada `http://localhost:8501`
 2. **Tab "📈 Statistik"**
    - Review informasi detail setiap kolom
    - Cek memory usage dan data shape
-   - Verifikasi kelengkapan data (terutama kolom alamat)
+   - Verifikasi kelengkapan data (terutama kolom alamat dan nomor WhatsApp)
 
 ### Langkah 5: Download Hasil
 
@@ -173,7 +186,38 @@ Jika ada nama usaha yang belum terklasifikasi, Anda dapat menambahkan pattern re
 - **kdkec**: Format menjadi 3 digit (contoh: `1` → `001`, `71` → `071`)
 - **kddesa**: Format menjadi 3 digit (contoh: `1` → `001`, `71` → `071`)
 
-### 3. Merge dengan Data Wilayah
+### 3. Clean Penamaan Usaha
+Fitur ini melakukan standarisasi format nama usaha dengan aturan berikut:
+
+1. **Mengubah semua jenis kurung menjadi format `<>`**:
+   - Kurung biasa `(content)` → `<content>`
+   - Kurung siku `[content]` → `<content>`
+   - Kurung kurawal `{content}` → `<content>`
+   - Tanda kutip ganda `"content"` → `<content>`
+   - Tanda kutip tunggal `'content'` → `<content>`
+   - Backtick `` `content` `` → `<content>`
+
+2. **Memindahkan bentuk badan hukum dari depan ke belakang**:
+   - `PT. ANJUNG MAKMUR` → `ANJUNG MAKMUR, PT`
+   - `CV. KARTIKA PUTRI` → `KARTIKA PUTRI, CV`
+   - `UD. TOKO MAKMUR` → `TOKO MAKMUR, UD`
+
+3. **Menangani bentuk badan hukum di belakang dengan titik**:
+   - `MAKALE TORAJA MINING. PT` → `MAKALE TORAJA MINING, PT`
+   - `PERUSAHAAN ABC CV.` → `PERUSAHAAN ABC, CV`
+
+4. **Membersihkan spasi ganda dan koma berulang**
+
+**Contoh Transformasi:**
+- `PT. ANJUNG MAKMUR` → `ANJUNG MAKMUR, PT`
+- `CV. KARTIKA PUTRI` → `KARTIKA PUTRI, CV`
+- `MAKALE TORAJA MINING. PT` → `MAKALE TORAJA MINING, PT`
+- `JUAL BELI ROTAN (ARDIN)` → `JUAL BELI ROTAN <ARDIN>`
+- `TOKO "MAKMUR"` → `TOKO <MAKMUR>`
+
+**Catatan**: Jika nama usaha sudah dalam format yang benar (sudah ada `, PT`, `, CV`, dll di belakang), maka hanya akan dilakukan cleaning kurung saja, tanpa memproses bentuk badan hukum.
+
+### 4. Merge dengan Data Wilayah
 Proses merge akan:
 1. Format kode wilayah di lookup table
 2. Membuat kolom `alamat_new` dari data wilayah dengan format:
@@ -188,12 +232,39 @@ Proses merge akan:
 
 **Catatan**: Proses ini hanya mengisi kolom alamat yang **kosong**. Alamat yang sudah ada tidak akan di-overwrite.
 
-### 4. Klasifikasi Bentuk Badan Hukum
+### 5. Klasifikasi Bentuk Badan Hukum
 - Menggunakan pattern matching dengan regex
 - Case-insensitive (tidak membedakan huruf besar/kecil)
 - Mencari pattern di seluruh nama usaha
 - Overwrite kolom `bentuk_badan_hukum_usaha` dengan kode yang sesuai
 - Jika tidak ada pattern yang match, kolom akan diisi `None`
+
+### 6. Deteksi Jaringan Usaha
+Fitur ini mendeteksi format `<XXXX>` dalam nama usaha dan secara otomatis:
+- Mengisi `bentuk_badan_hukum_usaha` dengan kode `12` (Usaha Perseorangan)
+- Mengisi `jaringan_usaha` dengan nilai `1`
+
+**Contoh:**
+- `PANGKAS RAMBUT MDC < APDIANTO RIO TUBUAN >` → Terdeteksi sebagai jaringan usaha
+- `TOKO MAKMUR <JOHN DOE>` → Terdeteksi sebagai jaringan usaha
+
+**Catatan**: Fitur ini akan override hasil klasifikasi bentuk badan hukum sebelumnya jika terdeteksi format `<XXXX>`.
+
+### 7. Isi Nomor WhatsApp
+Fitur ini mengisi kolom `nomor_whatsapp` yang kosong dari kolom `nomor_telepon` dengan konversi format:
+- Nomor telepon format `08...` → Nomor WhatsApp format `+628...`
+- Hanya nomor yang dimulai dengan `08` yang akan dikonversi
+- Karakter non-digit akan dihapus sebelum konversi
+
+**Contoh:**
+- `081234567890` → `+6281234567890`
+- `0812-3456-7890` → `+6281234567890`
+- `0812 3456 7890` → `+6281234567890`
+
+**Catatan**: 
+- Hanya mengisi kolom `nomor_whatsapp` yang **kosong**
+- Nomor WhatsApp yang sudah ada tidak akan di-overwrite
+- Jika nomor telepon tidak dimulai dengan `08`, tidak akan dikonversi
 
 ## 📁 Struktur File
 
@@ -220,6 +291,13 @@ BPS/script/eda_umkm/
 **Kolom Opsional (untuk merge wilayah):**
 - `alamat`: Kolom alamat (akan diisi jika kosong)
 
+**Kolom Opsional (untuk fill nomor WhatsApp):**
+- `nomor_telepon`: Kolom nomor telepon (digunakan untuk mengisi nomor WhatsApp)
+- `nomor_whatsapp`: Kolom nomor WhatsApp (akan diisi jika kosong)
+
+**Kolom Opsional (untuk deteksi jaringan usaha):**
+- `jaringan_usaha`: Kolom jaringan usaha (akan diisi dengan `1` jika terdeteksi format `<XXXX>`)
+
 ### Data Wilayah (Lookup Table)
 **Kolom Wajib:**
 - `kdprov`: Kode provinsi
@@ -237,13 +315,21 @@ BPS/script/eda_umkm/
 
 2. **Encoding CSV**: Jika file CSV tidak terbaca dengan benar, coba ubah encoding file ke UTF-8 atau gunakan format Excel.
 
-3. **Klasifikasi**: Review sample yang tidak terklasifikasi secara berkala dan tambahkan pattern baru untuk meningkatkan akurasi.
+3. **Skip Rows**: Gunakan fitur "Skip Rows" jika file memiliki header ganda atau baris kosong di awal. Contoh: jika ada 2 baris header, set skip rows = 1 untuk melewati header pertama.
 
-4. **Backup Data**: Selalu backup data original sebelum memproses, terutama jika melakukan overwrite.
+4. **Clean Nama Usaha**: Fitur ini akan memindahkan bentuk badan hukum ke belakang dan mengubah semua kurung menjadi format `<>`. Pastikan ini sesuai dengan kebutuhan Anda sebelum memproses.
 
-5. **Format Excel**: Format Excel output sudah terorganisir dengan header kategori. Jika perlu menyesuaikan, edit langsung di Excel setelah download.
+5. **Deteksi Jaringan Usaha**: Fitur ini akan override klasifikasi bentuk badan hukum jika terdeteksi format `<XXXX>`. Pastikan format ini memang menunjukkan jaringan usaha sebelum mengaktifkan fitur ini.
 
-6. **Session State**: Data yang sudah diproses tersimpan di session state. Refresh browser akan menghapus session state, jadi pastikan sudah download hasil sebelum refresh.
+6. **Nomor WhatsApp**: Konversi hanya berlaku untuk nomor yang dimulai dengan `08`. Nomor dengan format lain (misalnya `+62`, `62`, atau `021`) tidak akan dikonversi.
+
+7. **Klasifikasi**: Review sample yang tidak terklasifikasi secara berkala dan tambahkan pattern baru untuk meningkatkan akurasi.
+
+8. **Backup Data**: Selalu backup data original sebelum memproses, terutama jika melakukan overwrite.
+
+9. **Format Excel**: Format Excel output sudah terorganisir dengan header kategori. Jika perlu menyesuaikan, edit langsung di Excel setelah download.
+
+10. **Session State**: Data yang sudah diproses tersimpan di session state. Refresh browser akan menghapus session state, jadi pastikan sudah download hasil sebelum refresh.
 
 ## ⚠️ Catatan Penting
 
@@ -277,16 +363,30 @@ BPS/script/eda_umkm/
 - Cek memory tersedia (untuk file besar)
 - Coba download format CSV sebagai alternatif
 
+### Nomor WhatsApp tidak terisi
+- Pastikan kolom `nomor_telepon` ada dan berisi data
+- Pastikan nomor telepon dimulai dengan `08` (format Indonesia)
+- Cek apakah kolom `nomor_whatsapp` sudah ada di data (akan dibuat otomatis jika tidak ada)
+
+### Clean nama usaha tidak bekerja sesuai harapan
+- Pastikan nama usaha tidak terlalu kompleks atau memiliki format yang tidak standar
+- Cek hasil cleaning di preview sebelum melanjutkan proses
+- Jika perlu, edit manual di Excel setelah download
+
 ## 📝 Changelog
 
 ### Versi 1.0
 - Upload data usaha (CSV/Excel)
 - Upload data wilayah (opsional)
+- Skip rows setting untuk load data
 - Clean column names
 - Format kode wilayah
+- Clean penamaan usaha (standarisasi format)
 - Merge dengan data wilayah
 - Klasifikasi bentuk badan hukum (12 kategori)
-- Statistik data
+- Deteksi jaringan usaha dari format `<XXXX>`
+- Isi nomor WhatsApp dari nomor telepon
+- Statistik data (termasuk statistik nomor WhatsApp)
 - Export Excel dengan format terorganisir
 - Export CSV
 - Tambah pattern kustom untuk klasifikasi
