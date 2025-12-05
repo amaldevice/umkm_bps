@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDA Usaha - Data Processing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">📊</div>
+            <h1>EDA Usaha</h1>
+            <p>Exploratory Data Analysis & Processing Tool</p>
+        </header>
+
+        <main class="card">
+            <form action="{{ url_for('process') }}" method="post" enctype="multipart/form-data" id="processForm">
+                
+                <div class="section">
+                    <h2>📁 Upload Data</h2>
+                    <div class="form-group">
+                        <label for="usaha_file">Data Usaha (CSV/Excel) <span class="required">*</span></label>
+                        <input type="file" name="usaha_file" id="usaha_file" accept=".csv, .xlsx, .xls" required class="file-input">
+                        <small>File utama yang akan diproses.</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="wilayah_file">Data Wilayah (Excel) - Opsional</label>
+                        <input type="file" name="wilayah_file" id="wilayah_file" accept=".xlsx, .xls" class="file-input">
+                        <small>Untuk lookup dan perbaikan alamat.</small>
+                    </div>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="section">
+                    <h2>⚙️ Configuration</h2>
+                    <div class="row">
+                        <div class="col">
+                            <label for="skip_rows">Skip Rows</label>
+                            <input type="number" name="skip_rows" id="skip_rows" value="0" min="0" class="text-input">
+                        </div>
+                        <div class="col">
+                            <label for="kota_codes">Kode Kota (pisahkan koma)</label>
+                            <input type="text" name="kota_codes" id="kota_codes" value="71" class="text-input">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="section">
+                    <h2>🔧 Processing Steps</h2>
+                    <div class="checkbox-grid">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_clean_columns" checked>
+                            <span class="checkmark"></span>
+                            Clean Column Names
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_format_kode" checked>
+                            <span class="checkmark"></span>
+                            Format Kode Wilayah
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_clean_nama_usaha" checked>
+                            <span class="checkmark"></span>
+                            Clean Penamaan Usaha
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_fill_whatsapp" checked>
+                            <span class="checkmark"></span>
+                            Isi WhatsApp dari Telepon
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_merge_wilayah" id="merge_check" disabled>
+                            <span class="checkmark"></span>
+                            Merge dengan Data Wilayah
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_classify" checked>
+                            <span class="checkmark"></span>
+                            Klasifikasi Badan Hukum
+                        </label>
+                        
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="do_detect_jaringan" checked>
+                            <span class="checkmark"></span>
+                            Deteksi Jaringan Usaha
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary" id="submitBtn">
+                        🚀 Proses Data
+                    </button>
+                </div>
+            </form>
+        </main>
+        
+        <div id="loadingOverlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <p>Processing data, please wait...</p>
+        </div>
+    </div>
+
+    <script>
+        const wilayahFile = document.getElementById('wilayah_file');
+        const mergeCheck = document.getElementById('merge_check');
+        const form = document.getElementById('processForm');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        wilayahFile.addEventListener('change', function() {
+            if (this.files.length > 0) {
+                mergeCheck.disabled = false;
+                mergeCheck.checked = true;
+            } else {
+                mergeCheck.disabled = true;
+                mergeCheck.checked = false;
+            }
+        });
+
+        form.addEventListener('submit', function() {
+            loadingOverlay.classList.remove('hidden');
+        });
+    </script>
+</body>
+</html>
