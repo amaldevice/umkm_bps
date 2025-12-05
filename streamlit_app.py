@@ -67,10 +67,39 @@ def load_data(uploaded_file, skiprows=0):
     return df
 
 
-def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Bersihkan nama kolom."""
+def clean_columns(df: pd.DataFrame) -> tuple:
+    """Bersihkan nama kolom.
+    
+    Returns:
+        tuple: (df_cleaned, original_columns_mapping)
+            - df_cleaned: DataFrame dengan nama kolom yang sudah dibersihkan
+            - original_columns_mapping: Dict mapping dari nama kolom baru ke nama kolom original
+    """
     df = df.copy()
-    df.columns = df.columns.str.split('\n').str[0]
+    original_columns = df.columns.tolist()
+    cleaned_columns = df.columns.str.split('\n').str[0].tolist()
+    
+    # Buat mapping dari cleaned -> original
+    original_columns_mapping = dict(zip(cleaned_columns, original_columns))
+    
+    df.columns = cleaned_columns
+    return df, original_columns_mapping
+
+
+def restore_original_columns(df: pd.DataFrame, original_columns_mapping: dict) -> pd.DataFrame:
+    """Kembalikan nama kolom ke format original.
+    
+    Args:
+        df: DataFrame dengan nama kolom yang sudah dibersihkan
+        original_columns_mapping: Dict mapping dari nama kolom baru ke nama kolom original
+    
+    Returns:
+        DataFrame dengan nama kolom original
+    """
+    df = df.copy()
+    # Rename kolom yang ada di mapping
+    rename_map = {col: original_columns_mapping.get(col, col) for col in df.columns}
+    df = df.rename(columns=rename_map)
     return df
 
 
@@ -712,15 +741,23 @@ def organize_columns_by_category(df: pd.DataFrame) -> tuple:
     return df_ordered, ordered_columns, category_ranges
 
 
-def to_excel_bytes(df: pd.DataFrame) -> bytes:
+def to_excel_bytes(df: pd.DataFrame, original_columns_mapping: Optional[Dict[str, str]] = None) -> bytes:
     """Convert DataFrame ke Excel bytes dengan format terorganisir.
     
     - Urutan kolom DIJAGA sama persis dengan DataFrame input (seperti CSV).
     - Header kategori hanya menandai blok kolom:
       A-L: IDENTITAS, M-P: KEBERADAAN, Q-T: WILAYAH,
       U-Z: KARAKTERISTIK, AA-AD: KEGIATAN, AE-AF: LAIN LAIN.
+    
+    Args:
+        df: DataFrame yang akan diexport
+        original_columns_mapping: Dict mapping nama kolom cleaned -> original (opsional)
     """
     output = BytesIO()
+    
+    # Kembalikan nama kolom original jika mapping tersedia
+    if original_columns_mapping:
+        df = restore_original_columns(df, original_columns_mapping)
     
     # Gunakan urutan kolom apa adanya dari DataFrame
     df_ordered = df.copy()
@@ -821,8 +858,17 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    """Convert DataFrame ke CSV bytes."""
+def to_csv_bytes(df: pd.DataFrame, original_columns_mapping: Optional[Dict[str, str]] = None) -> bytes:
+    """Convert DataFrame ke CSV bytes.
+    
+    Args:
+        df: DataFrame yang akan diexport
+        original_columns_mapping: Dict mapping nama kolom cleaned -> original (opsional)
+    """
+    # Kembalikan nama kolom original jika mapping tersedia
+    if original_columns_mapping:
+        df = restore_original_columns(df, original_columns_mapping)
+    
     return df.to_csv(index=False).encode('utf-8')
 
 
@@ -933,7 +979,7 @@ def main():
                 do_clean_columns = st.checkbox("Clean column names", value=True)
                 do_format_kode = st.checkbox("Format kode wilayah", value=True)
                 do_clean_nama_usaha = st.checkbox("Clean penamaan usaha", value=True)
-                
+                do_fill_whatsapp = st.checkbox("Isi nomor WhatsApp dari nomor telepon", value=True)
             
             with col2:
                 do_merge_wilayah = st.checkbox(
@@ -943,7 +989,6 @@ def main():
                 )
                 do_classify = st.checkbox("Klasifikasi bentuk badan hukum", value=True)
                 do_detect_jaringan = st.checkbox("Deteksi jaringan usaha tunggal/perorangan (format <XXXX>)", value=True)
-                do_fill_whatsapp = st.checkbox("Isi nomor WhatsApp dari nomor telepon", value=True)
             
             if st.button("🚀 Proses Data", type="primary"):
                 progress = st.progress(0)
@@ -954,8 +999,13 @@ def main():
                 # Step 1: Clean columns
                 if do_clean_columns:
                     status.text("Cleaning column names...")
-                    df_processed = clean_columns(df_processed)
+                    df_processed, original_columns_mapping = clean_columns(df_processed)
+                    # Simpan mapping ke session state untuk restore saat export
+                    st.session_state['original_columns_mapping'] = original_columns_mapping
                     progress.progress(20)
+                else:
+                    # Reset mapping jika tidak clean columns
+                    st.session_state['original_columns_mapping'] = None
                 
                 # Step 2: Format kode wilayah
                 if do_format_kode:
@@ -1187,10 +1237,20 @@ def main():
                 st.dataframe(df_download.head(50), use_container_width=True)
             
             # Download buttons
+            # Opsi untuk restore nama kolom original
+            restore_columns = st.checkbox(
+                "Kembalikan nama kolom ke format original saat export",
+                value=True,
+                help="Jika dicentang, nama kolom akan dikembalikan seperti saat awal data diinput (sebelum clean columns)"
+            )
+            
+            # Dapatkan mapping dari session state
+            original_columns_mapping = st.session_state.get('original_columns_mapping', None) if restore_columns else None
+            
             col1, col2 = st.columns(2)
             
             with col1:
-                excel_data = to_excel_bytes(df_download)
+                excel_data = to_excel_bytes(df_download, original_columns_mapping)
                 st.download_button(
                     label="📥 Download Excel (.xlsx)",
                     data=excel_data,
@@ -1199,7 +1259,7 @@ def main():
                 )
             
             with col2:
-                csv_data = to_csv_bytes(df_download)
+                csv_data = to_csv_bytes(df_download, original_columns_mapping)
                 st.download_button(
                     label="📥 Download CSV (.csv)",
                     data=csv_data,
