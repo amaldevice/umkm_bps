@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDA Usaha - Results</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="container wide">
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">📊</div>
+                <h1>Processing Results</h1>
+            </div>
+            <a href="{{ url_for('index') }}" class="btn-secondary">← Back to Upload</a>
+        </header>
+
+        <div class="dashboard-grid">
+            <!-- Stats Cards -->
+            <div class="card stat-card">
+                <h3>Total Rows</h3>
+                <div class="value">{{ "{:,}".format(stats.rows) }}</div>
+            </div>
+            <div class="card stat-card">
+                <h3>Total Columns</h3>
+                <div class="value">{{ stats.columns }}</div>
+            </div>
+            <div class="card stat-card">
+                <h3>Memory Usage</h3>
+                <div class="value">{{ stats.memory }}</div>
+            </div>
+
+            <!-- Download Card -->
+            <div class="card download-card">
+                <h3>💾 Download Results</h3>
+                <div class="download-buttons">
+                    <a href="{{ url_for('download', format_type='excel') }}" class="btn-download excel">
+                        📥 Excel (.xlsx)
+                    </a>
+                    <a href="{{ url_for('download', format_type='csv') }}" class="btn-download csv">
+                        📥 CSV (.csv)
+                    </a>
+                </div>
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="restore_cols" checked onchange="updateDownloadLinks()">
+                    <label for="restore_cols">Restore Original Column Names</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-grid">
+            <!-- Classification Summary -->
+            <div class="card full-width">
+                <h2>📊 Klasifikasi Bentuk Badan Hukum</h2>
+                <div class="row">
+                    <div class="col-table">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Kode</th>
+                                    <th>Bentuk Badan Hukum</th>
+                                    <th>Jumlah</th>
+                                    <th>Persentase</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in summary_data %}
+                                <tr>
+                                    <td>{{ item.kode }}</td>
+                                    <td>{{ item.nama }}</td>
+                                    <td>{{ "{:,}".format(item.jumlah) }}</td>
+                                    <td>{{ item.persentase }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="col-chart">
+                        <canvas id="classificationChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Unclassified & Custom Pattern -->
+            <div class="card half-width">
+                <h2>📝 Unclassified Samples</h2>
+                {% if unclassified_samples %}
+                <ul class="sample-list">
+                    {% for sample in unclassified_samples %}
+                    <li>{{ sample }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="success-message">✅ Semua data sudah terklasifikasi!</div>
+                {% endif %}
+            </div>
+
+            <div class="card half-width">
+                <h2>➕ Add Custom Pattern</h2>
+                <form id="patternForm" class="pattern-form">
+                    <div class="form-group">
+                        <label>Bentuk Badan Hukum</label>
+                        <select id="custom_kode" class="select-input">
+                            {% for kode, nama in kode_names.items() %}
+                            <option value="{{ kode }}">{{ kode }} - {{ nama }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Regex Pattern</label>
+                        <input type="text" id="custom_pattern" placeholder="(?i)\b(KEYWORD)\b" class="text-input">
+                    </div>
+                    <button type="submit" class="btn-primary small">Apply Pattern</button>
+                </form>
+                <div id="patternResult" class="pattern-result hidden"></div>
+            </div>
+
+            <!-- Data Preview -->
+            <div class="card full-width">
+                <h2>📋 Data Preview (Top 50)</h2>
+                <div class="table-responsive">
+                    {{ preview_html | safe }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chart.js
+        const ctx = document.getElementById('classificationChart').getContext('2d');
+        const chartData = {{ pie_data | tojson }};
+
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: chartData.labels,
+                datasets: [{
+                    data: chartData.values,
+                    backgroundColor: [
+                        '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+                        '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            boxWidth: 12,
+                            font: {
+                                size: 11
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Update Download Links
+        function updateDownloadLinks() {
+            const restore = document.getElementById('restore_cols').checked;
+            const links = document.querySelectorAll('.btn-download');
+            links.forEach(link => {
+                const url = new URL(link.href);
+                url.searchParams.set('restore', restore);
+                link.href = url.toString();
+            });
+        }
+
+        // Handle Pattern Form
+        document.getElementById('patternForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const kode = document.getElementById('custom_kode').value;
+            const pattern = document.getElementById('custom_pattern').value;
+            const resultDiv = document.getElementById('patternResult');
+
+            if (!pattern) return;
+
+            try {
+                const response = await fetch("{{ url_for('apply_pattern') }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ kode, pattern })
+                });
+
+                const data = await response.json();
+
+                resultDiv.classList.remove('hidden');
+                if (data.success) {
+                    resultDiv.className = 'pattern-result success';
+                    resultDiv.textContent = `✅ Success! ${data.count} new rows classified. Reloading...`;
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    resultDiv.className = 'pattern-result error';
+                    resultDiv.textContent = `❌ Error: ${data.message}`;
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+
+</html>
