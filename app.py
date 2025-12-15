@@ -18,6 +18,33 @@ warnings.filterwarnings('ignore')
 # HELPER FUNCTIONS FOR MODIFIED ROWS DETECTION
 # =============================================================================
 
+def normalize_column_name(col_name: str) -> str:
+    """Normalize column name by extracting the base name before any newlines or special characters.
+
+    Args:
+        col_name: Original column name that might contain newlines and descriptions
+
+    Returns:
+        Normalized column name
+    """
+    if not isinstance(col_name, str):
+        return str(col_name)
+
+    # Extract the base name before any newlines or special markers
+    # Handle cases like "keberadaan_usaha\n\n1. Aktif\n2. Tutup..." -> "keberadaan_usaha"
+    base_name = str(col_name).split('\n')[0].strip()
+
+    # Also handle cases with brackets like "idsbr_master\n\n[diisi jika...]" -> "idsbr_master"
+    if '[' in base_name:
+        base_name = base_name.split('[')[0].strip()
+
+    # Handle cases with asterisks like "kdprov\n\n*ket: ..." -> "kdprov"
+    if '*' in base_name:
+        base_name = base_name.split('*')[0].strip()
+
+    return base_name
+
+
 def get_modified_rows(df_original: pd.DataFrame, df_processed: pd.DataFrame) -> List[int]:
     """Deteksi baris yang telah dimodifikasi selama pemrosesan.
 
@@ -28,18 +55,34 @@ def get_modified_rows(df_original: pd.DataFrame, df_processed: pd.DataFrame) -> 
     Returns:
         List indeks baris yang telah dimodifikasi
     """
-    if df_original.shape != df_processed.shape:
-        # Jika shape berbeda, kemungkinan ada kolom baru yang ditambahkan
-        # Bandingkan hanya kolom yang ada di kedua DataFrame
-        common_cols = list(set(df_original.columns) & set(df_processed.columns))
-        if not common_cols:
-            return list(range(len(df_processed)))  # Semua baris dianggap modified jika tidak ada kolom common
+    # Create mapping from normalized original column names to processed column names
+    orig_to_proc_mapping = {}
 
-        df_orig_common = df_original[common_cols].copy()
-        df_proc_common = df_processed[common_cols].copy()
-    else:
-        df_orig_common = df_original.copy()
-        df_proc_common = df_processed.copy()
+    # For each original column, find the best match in processed columns
+    for orig_col in df_original.columns:
+        normalized_orig = normalize_column_name(orig_col)
+
+        # First try exact match with normalized name
+        if normalized_orig in df_processed.columns:
+            orig_to_proc_mapping[orig_col] = normalized_orig
+        else:
+            # Try case-insensitive match
+            for proc_col in df_processed.columns:
+                if normalize_column_name(proc_col).lower() == normalized_orig.lower():
+                    orig_to_proc_mapping[orig_col] = proc_col
+                    break
+
+    # Filter to only columns that have matches in both DataFrames
+    common_orig_cols = [col for col in df_original.columns if col in orig_to_proc_mapping]
+    common_proc_cols = [orig_to_proc_mapping[col] for col in common_orig_cols]
+
+    if not common_orig_cols:
+        # If no common columns found, return all rows as modified
+        return list(range(len(df_processed)))
+
+    # Create filtered DataFrames with only common columns
+    df_orig_common = df_original[common_orig_cols].copy()
+    df_proc_common = df_processed[common_proc_cols].copy()
 
     # Handle NaN values untuk perbandingan yang konsisten
     df_orig_common = df_orig_common.fillna('')
@@ -56,9 +99,11 @@ def get_modified_rows(df_original: pd.DataFrame, df_processed: pd.DataFrame) -> 
 
         # Bandingkan setiap kolom
         is_modified = False
-        for col in df_orig_common.columns:
-            val_orig = str(row_orig[col]).strip()
-            val_proc = str(row_proc[col]).strip()
+        for i, orig_col in enumerate(common_orig_cols):
+            proc_col = common_proc_cols[i]
+
+            val_orig = str(row_orig[orig_col]).strip()
+            val_proc = str(row_proc[proc_col]).strip()
 
             # Normalisasi untuk perbandingan
             if val_orig != val_proc:
@@ -186,11 +231,12 @@ def main():
                     do_clean_cols = st.checkbox("Clean Columns", True)
                     do_fmt_kode = st.checkbox("Format Wilayah", True)
                     do_clean_nama = st.checkbox("Clean Nama Usaha", True)
+                    do_wa = st.checkbox("Format WhatsApp", True)
                 with c2:
                     do_merge = st.checkbox("Merge Wilayah", value=wilayah_file is not None, disabled=wilayah_file is None)
                     do_classify = st.checkbox("Klasifikasi Badan Hukum", True)
                     do_jaringan = st.checkbox("Deteksi Jaringan", True)
-                    do_wa = st.checkbox("Format WhatsApp", True)
+                    
 
                 if st.button("🚀 Proses Data EDA"):
                     # Simpan copy asli untuk tracking perubahan
