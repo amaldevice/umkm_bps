@@ -7,11 +7,90 @@ import streamlit as st
 import pandas as pd
 import warnings
 from streamlit_option_menu import option_menu
+from typing import List
 
 # Import modul lokal
 from src import utils, processing, classification, duplication, merger
 
 warnings.filterwarnings('ignore')
+
+# =============================================================================
+# HELPER FUNCTIONS FOR MODIFIED ROWS DETECTION
+# =============================================================================
+
+def get_modified_rows(df_original: pd.DataFrame, df_processed: pd.DataFrame) -> List[int]:
+    """Deteksi baris yang telah dimodifikasi selama pemrosesan.
+
+    Args:
+        df_original: DataFrame asli sebelum pemrosesan
+        df_processed: DataFrame setelah pemrosesan
+
+    Returns:
+        List indeks baris yang telah dimodifikasi
+    """
+    if df_original.shape != df_processed.shape:
+        # Jika shape berbeda, kemungkinan ada kolom baru yang ditambahkan
+        # Bandingkan hanya kolom yang ada di kedua DataFrame
+        common_cols = list(set(df_original.columns) & set(df_processed.columns))
+        if not common_cols:
+            return list(range(len(df_processed)))  # Semua baris dianggap modified jika tidak ada kolom common
+
+        df_orig_common = df_original[common_cols].copy()
+        df_proc_common = df_processed[common_cols].copy()
+    else:
+        df_orig_common = df_original.copy()
+        df_proc_common = df_processed.copy()
+
+    # Handle NaN values untuk perbandingan yang konsisten
+    df_orig_common = df_orig_common.fillna('')
+    df_proc_common = df_proc_common.fillna('')
+
+    # Bandingkan setiap baris
+    modified_indices = []
+    for idx in range(len(df_orig_common)):
+        if idx >= len(df_proc_common):
+            break
+
+        row_orig = df_orig_common.iloc[idx]
+        row_proc = df_proc_common.iloc[idx]
+
+        # Bandingkan setiap kolom
+        is_modified = False
+        for col in df_orig_common.columns:
+            val_orig = str(row_orig[col]).strip()
+            val_proc = str(row_proc[col]).strip()
+
+            # Normalisasi untuk perbandingan
+            if val_orig != val_proc:
+                is_modified = True
+                break
+
+        if is_modified:
+            modified_indices.append(idx)
+
+    # Jika ada kolom baru di df_processed, tandai semua baris sebagai modified
+    new_columns = set(df_processed.columns) - set(df_original.columns)
+    if new_columns:
+        modified_indices = list(range(len(df_processed)))
+
+    return modified_indices
+
+
+def filter_modified_rows_only(df: pd.DataFrame, modified_indices: List[int]) -> pd.DataFrame:
+    """Filter DataFrame untuk hanya menampilkan baris yang telah dimodifikasi.
+
+    Args:
+        df: DataFrame yang akan difilter
+        modified_indices: List indeks baris yang telah dimodifikasi
+
+    Returns:
+        DataFrame yang hanya berisi baris yang dimodifikasi
+    """
+    if not modified_indices:
+        # Jika tidak ada baris yang dimodifikasi, return DataFrame kosong dengan struktur yang sama
+        return df.iloc[0:0].copy()
+
+    return df.iloc[modified_indices].copy()
 
 # =============================================================================
 # PAGE CONFIG
@@ -69,7 +148,8 @@ def main():
             usaha_file = st.file_uploader("Data Usaha (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
             wilayah_file = st.file_uploader("Data Wilayah (Excel) - Opsional", type=['xlsx', 'xls'])
 
-            skip_rows = st.number_input("Skip Rows", min_value=0, value=1, step=1)
+            skip_rows = st.number_input("Skip Rows", min_value=0, value=1, step=1, 
+                                        help="Isi dengan nomor baris untuk skip heading data. Jika data usaha memiliki header, isi 1. Jika memiliki 2 baris header, isi 2. Jika tidak, isi 0. Jika tidak ada header, isi 0.")
 
             st.write("Kode Kabupaten = Kota:")
             kota_codes_input = st.text_input("Kode Kota (pisahkan koma)", value="71")
@@ -113,6 +193,9 @@ def main():
                     do_wa = st.checkbox("Format WhatsApp", True)
 
                 if st.button("🚀 Proses Data EDA"):
+                    # Simpan copy asli untuk tracking perubahan
+                    df_original = df.copy()
+
                     # .. Panggil fungsi processing dari src ..
                     df_proc = df.copy()
                     if do_clean_cols: df_proc, _ = processing.clean_columns(df_proc)
@@ -125,8 +208,19 @@ def main():
                     if do_jaringan: df_proc = classification.detect_and_fill_jaringan_usaha(df_proc)
                     if do_wa: df_proc = processing.fill_nomor_whatsapp(df_proc)
 
+                    # Track modified rows untuk fitur download selective
+                    modified_indices = get_modified_rows(df_original, df_proc)
+                    st.session_state['eda_modified_indices'] = modified_indices
+
                     st.session_state['df_eda_result'] = df_proc
-                    st.success("Selesai!")
+
+                    # Hitung statistik perubahan
+                    total_rows = df_proc.shape[0]
+                    modified_rows = len(modified_indices)
+                    unchanged_rows = total_rows - modified_rows
+
+                    st.success(f"✅ Data processed: {total_rows:,} rows × {df_proc.shape[1]} columns")
+                    st.info(f"📊 Ringkasan perubahan: {modified_rows:,} baris dimodifikasi, {unchanged_rows:,} baris tidak berubah")
                     st.dataframe(df_proc.head())
 
             # (Tab 3, 4 logic sama...)
@@ -252,21 +346,52 @@ def main():
                     st.subheader("💾 Download Hasil")
                     st.info("Download menggunakan template asli (Format terjaga).")
 
+                    # Opsi untuk download hanya baris yang dimodifikasi
+                    modified_indices = st.session_state.get('eda_modified_indices', [])
+                    download_modified_only = st.checkbox(
+                        f"Download hanya baris yang dimodifikasi ({len(modified_indices):,} baris)",
+                        value=False,
+                        help="Jika dicentang, hanya baris yang telah diubah selama pemrosesan yang akan didownload. Jika tidak dicentang, semua baris akan didownload.",
+                        disabled=len(modified_indices) == 0
+                    )
+
+                    # Filter data berdasarkan opsi download
+                    df_for_download = df_res.copy()
+                    if download_modified_only and modified_indices:
+                        df_for_download = filter_modified_rows_only(df_res, modified_indices)
+                        st.info(f"📥 Download mode: Hanya baris yang dimodifikasi ({len(df_for_download):,} baris)")
+
+                    # Update informasi jumlah data
+                    download_info = f"Data siap download: **{df_for_download.shape[0]:,} rows × {df_for_download.shape[1]} columns**"
+                    if download_modified_only and modified_indices:
+                        download_info += f" (filtered dari {df_res.shape[0]:,} total baris)"
+                    st.write(download_info)
+
+                    # Preview data
+                    with st.expander("Preview Data"):
+                        preview_df = df_for_download if download_modified_only and modified_indices else df_res
+                        preview_title = "Preview Data (Hanya Baris Dimodifikasi)" if download_modified_only and modified_indices else "Preview Data (Semua Baris)"
+                        st.write(f"**{preview_title}**")
+                        st.dataframe(preview_df.head(50), use_container_width=True)
+
                     # PANGGIL FUNGSI BARU DI SINI
                     # Pastikan 'usaha_file' masih bisa diakses (variabel file uploader di atas)
                     if usaha_file:
                         try:
                             excel_bytes = utils.save_to_template_excel(
                                 usaha_file,
-                                df_res,
+                                df_for_download,
                                 header_row_index=2,  # Sesuaikan dengan template Anda (Row 2)
                                 data_start_row=3  # Data mulai di Row 3
                             )
 
+                            download_label = "Download Excel (Template Asli - Modified Only)" if download_modified_only and modified_indices else "Download Excel (Template Asli)"
+                            filename_suffix = "_modified" if download_modified_only and modified_indices else "_processed"
+
                             st.download_button(
-                                label="Download Excel (Template Asli)",
+                                label=download_label,
                                 data=excel_bytes,
-                                file_name=f"{output_filename}_processed.xlsx",
+                                file_name=f"{output_filename}{filename_suffix}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         except Exception as e:
@@ -274,10 +399,13 @@ def main():
                             st.warning("Pastikan nama kolom di Excel tidak berubah drastis.")
 
                             # Fallback ke metode lama jika gagal
+                            fallback_label = "Download Excel (Format Standar - Modified Only)" if download_modified_only and modified_indices else "Download Excel (Format Standar)"
+                            filename_suffix = "_modified" if download_modified_only and modified_indices else "_standard"
+
                             st.download_button(
-                                "Download Excel (Format Standar)",
-                                utils.to_excel_bytes(df_res),
-                                f"{output_filename}_standard.xlsx"
+                                fallback_label,
+                                utils.to_excel_bytes(df_for_download),
+                                f"{output_filename}{filename_suffix}.xlsx"
                             )
         else:
             st.info("👆 Silakan upload file data usaha di sidebar sebelah kiri.")
